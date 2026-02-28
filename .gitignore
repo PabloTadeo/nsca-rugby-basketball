@@ -1,0 +1,15 @@
+# Raw data files — keep private, never push to GitHub
+*.csv
+Raw_data/
+
+# macOS system files
+.DS_Store
+**/.DS_Store
+
+# R session artifacts
+.Rhistory
+.RData
+.Rproj.user/
+
+# Rendered documents (may contain embedded data)
+*.html
