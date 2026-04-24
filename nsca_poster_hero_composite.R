@@ -281,13 +281,23 @@ p_B <- ggplot(master |> filter(!is.na(jump_height_cm)),
 #    Variables: CMJ Peak Force | IMTP Peak Force |
 #               CMJ Propulsive Impulse | IMTP Impulse 100ms
 # =============================================================================
-cat("--- Panel C: Longitudinal LOESS trends ---\n")
+cat("--- Panel C: Longitudinal LOESS (5 individual panels, data-driven Y limits) ---\n")
+# WHY per-panel approach:
+#   With facet_wrap + free_y, coord_cartesian cannot be set per facet — the Y
+#   range is driven by ALL layers including the LOESS CI ribbon, which fans out
+#   at season edges and creates whitespace. Building 5 individual ggplots and
+#   applying coord_cartesian(ylim) per variable (1st–99th pctile of raw data ±
+#   6% pad) eliminates that whitespace without distorting the LOESS fit (the
+#   smooth is computed on full data; only the VIEW is clipped). wrap_elements()
+#   makes the sub-patchwork an opaque single cell so the outer A/B/C/D/E
+#   tag sequence is preserved.
 
 TEMPORAL_VARS <- c(
-  "cmj_peak_force_n"     = "CMJ Peak Force (N)",
-  "imtp_peak_force_n"    = "IMTP Peak Force (N)",
-  "cmj_impulse_ns"       = "CMJ Propulsive Impulse (N·s)",
-  "imtp_impulse_100ms_ns"= "IMTP Impulse 100ms (N·s)"
+  "cmj_peak_force_n"      = "CMJ Peak Force (N)",
+  "imtp_peak_force_n"     = "IMTP Peak Force (N)",
+  "peak_power_w"          = "Peak Power (W)",
+  "cmj_impulse_ns"        = "CMJ Propulsive Impulse (N·s)",
+  "imtp_impulse_100ms_ns" = "IMTP Impulse 100ms (N·s)"
 )
 
 temporal_long <- master |>
@@ -297,52 +307,72 @@ temporal_long <- master |>
     names_to  = "var_key",
     values_to = "value"
   ) |>
-  filter(!is.na(value), !is.na(week)) |>
-  mutate(
-    Variable = factor(var_key,
-                      levels = names(TEMPORAL_VARS),
-                      labels = unname(TEMPORAL_VARS))
+  filter(!is.na(value), !is.na(week))
+
+# Builder: one panel per variable with tight coord_cartesian Y limits
+make_loess_panel <- function(vkey, vlabel, df_long) {
+  df <- df_long |> filter(var_key == vkey)
+
+  # Data-driven Y window: 1st–99th pctile of raw observations ± 6% padding.
+  # coord_cartesian clips the VIEW only — LOESS is still fitted on full range.
+  q_lo  <- quantile(df$value, 0.01, na.rm = TRUE)
+  q_hi  <- quantile(df$value, 0.99, na.rm = TRUE)
+  pad   <- (q_hi - q_lo) * 0.06
+  ylims <- c(q_lo - pad, q_hi + pad)
+
+  ggplot(df, aes(x = week, y = value, color = sport, fill = sport)) +
+    geom_point(alpha = 0.18, size = 1.3, stroke = 0, shape = 16) +
+    geom_smooth(
+      method    = "loess",
+      formula   = y ~ x,
+      se        = TRUE,
+      span      = 0.8,
+      alpha     = 0.17,
+      linewidth = 1.6
+    ) +
+    coord_cartesian(ylim = ylims) +          # VIEW clip — no data removal
+    scale_color_manual(values = SPORT_COLS,  name = "Sport") +
+    scale_fill_manual(values  = SPORT_FILLS, name = "Sport") +
+    scale_x_continuous(
+      name   = "Monitoring Week",
+      breaks = seq(0, 35, by = 5),
+      expand = expansion(add = c(0.2, 0.8))
+    ) +
+    scale_y_continuous(
+      labels = scales::comma,
+      expand = expansion(mult = c(0, 0))     # coord_cartesian owns the padding
+    ) +
+    labs(title = vlabel, y = NULL) +
+    theme_P(16) +
+    theme(
+      plot.title      = element_text(face = "bold", size = 15.5,
+                                     hjust = 0.5, margin = margin(b = 4)),
+      axis.title.x    = element_text(face = "bold", size = 15,
+                                     margin = margin(t = 8)),
+      legend.position = "none"               # collected at outer composite
+    )
+}
+
+# Build 5 panels
+c_panels <- map2(
+  names(TEMPORAL_VARS),
+  unname(TEMPORAL_VARS),
+  ~ make_loess_panel(.x, .y, temporal_long)
+)
+
+# Assemble as a sub-patchwork row with shared subtitle
+p_C_inner <- wrap_plots(c_panels, nrow = 1) +
+  plot_annotation(
+    subtitle = "Longitudinal Neuromuscular Trends: LOESS \u00b1 95% CI  |  Ghost points = individual athlete-sessions",
+    theme    = theme(
+      plot.subtitle = element_text(size = 13, color = "grey30",
+                                   hjust = 0, margin = margin(b = 4, l = 2))
+    )
   )
 
-# Observation counts per facet for caption
-obs_counts <- temporal_long |>
-  count(Variable, sport) |>
-  pivot_wider(names_from = sport, values_from = n)
-
-p_C <- ggplot(temporal_long,
-              aes(x = week, y = value, color = sport, fill = sport)) +
-  # Background raw points
-  geom_point(alpha = 0.18, size = 1.3, stroke = 0, shape = 16) +
-  # LOESS trend + 95% CI ribbon
-  geom_smooth(
-    method    = "loess",
-    formula   = y ~ x,
-    se        = TRUE,
-    span      = 0.8,
-    alpha     = 0.17,
-    linewidth = 1.6
-  ) +
-  facet_wrap(~ Variable, scales = "free_y", ncol = 4) +
-  scale_color_manual(values = SPORT_COLS,  name = "Sport") +
-  scale_fill_manual(values  = SPORT_FILLS, name = "Sport") +
-  scale_x_continuous(
-    name   = "Monitoring Week",
-    breaks = seq(0, 35, by = 5),
-    expand = expansion(add = c(0.2, 0.8))
-  ) +
-  scale_y_continuous(expand = expansion(mult = 0.07)) +
-  labs(
-    subtitle = "Longitudinal Neuromuscular Trends: LOESS ± 95% CI  |  Ghost points = individual athlete-sessions",
-    y        = NULL
-  ) +
-  theme_P(16) +
-  theme(
-    strip.text    = element_text(face = "bold", size = 15.5,
-                                 margin = margin(5, 0, 5, 0)),
-    panel.spacing = unit(1.1, "lines"),
-    axis.title.x  = element_text(face = "bold", size = 16,
-                                 margin = margin(t = 8))
-  )
+# wrap_elements() → single opaque cell in outer composite
+# Ensures A/B/[C]/D/E tag sequence is preserved (not A/B/C/D/E/F/G/H/I)
+p_C <- wrap_elements(full = p_C_inner)
 
 # =============================================================================
 # 6. PANEL D — CMJ Propulsive Impulse vs. Jump Height (scatter)
